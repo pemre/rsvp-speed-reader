@@ -20,6 +20,7 @@ import {
   Type,
   Layout,
   Music,
+  X,
 } from "lucide-react";
 import RSVPPlayer from "./components/RSVPPlayer";
 import BackgroundMusic from "./components/BackgroundMusic";
@@ -27,10 +28,26 @@ import VideoExportButton from "./components/VideoExportButton";
 import { processText } from "./utils/textProcessor";
 import { WordData, AppFont, AppFontWeight } from "./types";
 
+const DEFAULT_TEXT =
+  "Speed reading is a skill that can be developed with practice. Rapid Serial Visual Presentation, or RSVP, is one of the most effective methods to achieve higher reading speeds. By presenting words one by one at a fixed focal point, we eliminate the time lost in eye movements across a page. This app allows you to customize your experience by adjusting the Words Per Minute. Focus on the red character and let the information flow directly into your mind.";
+
+const READING_SESSION_STORAGE_KEY = "rsvp-speed-reader-session";
+
+interface SavedReadingSession {
+  text: string;
+  currentIndex: number;
+  title: string;
+  updatedAt: number;
+}
+
+const getReadingTitle = (value: string) => {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) return "Untitled reading";
+  return normalized.length > 48 ? `${normalized.slice(0, 48)}...` : normalized;
+};
+
 const App: React.FC = () => {
-  const [text, setText] = useState<string>(
-    "Speed reading is a skill that can be developed with practice. Rapid Serial Visual Presentation, or RSVP, is one of the most effective methods to achieve higher reading speeds. By presenting words one by one at a fixed focal point, we eliminate the time lost in eye movements across a page. This app allows you to customize your experience by adjusting the Words Per Minute. Focus on the red character and let the information flow directly into your mind."
-  );
+  const [text, setText] = useState<string>(DEFAULT_TEXT);
   const [wpm, setWpm] = useState<number>(300);
   const [initialWpm, setInitialWpm] = useState<number>(300);
   const [targetWpm, setTargetWpm] = useState<number>(600);
@@ -48,6 +65,9 @@ const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [isZenMode, setIsZenMode] = useState<boolean>(false);
   const [showZenHint, setShowZenHint] = useState<boolean>(false);
+  const [savedSession, setSavedSession] = useState<SavedReadingSession | null>(null);
+  const [isSavedSessionDismissed, setIsSavedSessionDismissed] =
+    useState<boolean>(false);
 
   const words = useMemo(() => processText(text), [text]);
 
@@ -70,6 +90,20 @@ const App: React.FC = () => {
 
   useEffect(() => {
     try {
+      const rawSession = localStorage.getItem(READING_SESSION_STORAGE_KEY);
+      if (!rawSession) return;
+
+      const parsedSession = JSON.parse(rawSession) as SavedReadingSession;
+      if (!parsedSession.text?.trim()) return;
+
+      setSavedSession(parsedSession);
+    } catch {
+      localStorage.removeItem(READING_SESSION_STORAGE_KEY);
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
       const hashParams = new URLSearchParams(window.location.hash.slice(1));
       const hashText = hashParams.get("text");
       const prefilledText = hashText?.trim();
@@ -77,11 +111,41 @@ const App: React.FC = () => {
       if (!prefilledText) return;
 
       setText(prefilledText);
+      setSavedSession(null);
+      setIsSavedSessionDismissed(true);
+      localStorage.removeItem(READING_SESSION_STORAGE_KEY);
       reset();
     } catch {
       // Ignore malformed hash payloads and keep default text.
     }
   }, [reset]);
+
+  const setReaderText = useCallback(
+    (nextText: string) => {
+      setText(nextText);
+      setSavedSession(null);
+      setIsSavedSessionDismissed(false);
+      localStorage.removeItem(READING_SESSION_STORAGE_KEY);
+      reset();
+    },
+    [reset]
+  );
+
+  const resumeSavedSession = useCallback(() => {
+    if (!savedSession) return;
+
+    setText(savedSession.text);
+    setCurrentIndex(savedSession.currentIndex);
+    setIsPlaying(false);
+    setSavedSession(null);
+    setIsSavedSessionDismissed(true);
+  }, [savedSession]);
+
+  const dismissSavedSession = useCallback(() => {
+    setSavedSession(null);
+    setIsSavedSessionDismissed(true);
+    localStorage.removeItem(READING_SESSION_STORAGE_KEY);
+  }, []);
 
   const enterZenMode = () => {
     setIsZenMode(true);
@@ -114,6 +178,27 @@ const App: React.FC = () => {
   }, [togglePlay]);
 
   useEffect(() => {
+    if (
+      isSavedSessionDismissed ||
+      !text.trim() ||
+      words.length === 0 ||
+      (savedSession && savedSession.text !== text)
+    ) {
+      return;
+    }
+
+    const session: SavedReadingSession = {
+      text,
+      currentIndex: Math.min(currentIndex, Math.max(words.length - 1, 0)),
+      title: getReadingTitle(text),
+      updatedAt: Date.now(),
+    };
+
+    localStorage.setItem(READING_SESSION_STORAGE_KEY, JSON.stringify(session));
+    setSavedSession(session);
+  }, [currentIndex, isSavedSessionDismissed, savedSession, text, words.length]);
+
+  useEffect(() => {
     if (isPlaying && words.length > 0 && currentIndex < words.length) {
       let currentWpm = wpm;
 
@@ -142,10 +227,23 @@ const App: React.FC = () => {
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [isPlaying, currentIndex, words, wpm]);
+  }, [
+    isPlaying,
+    currentIndex,
+    words,
+    wpm,
+    enableGradualIncrease,
+    initialWpm,
+    targetWpm,
+  ]);
 
   const progress =
     words.length > 0 ? ((currentIndex + 1) / words.length) * 100 : 0;
+  const savedProgress = savedSession
+    ? Math.round(
+        ((savedSession.currentIndex + 1) / processText(savedSession.text).length) * 100
+      )
+    : 0;
 
   const currentDisplayWpm = useMemo(() => {
     if (isPlaying && enableGradualIncrease && words.length > 0) {
@@ -254,6 +352,49 @@ const App: React.FC = () => {
           isZenMode ? "gap-0 py-0" : "gap-8 py-12"
         }`}
       >
+        {!isZenMode && savedSession && savedSession.text !== text && (
+          <section className="w-full max-w-3xl rounded-2xl border border-red-900/60 bg-zinc-950/80 p-5 shadow-[0_0_30px_rgba(220,38,38,0.08)]">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-red-500">
+                <Play size={16} />
+                <span className="text-[10px] font-bold uppercase tracking-[0.2em]">
+                  Continue Reading
+                </span>
+              </div>
+              <button
+                onClick={dismissSavedSession}
+                className="text-zinc-500 transition-colors hover:text-white"
+                aria-label="Dismiss saved reading"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <p className="truncate text-sm text-zinc-200 sm:text-base">
+              {savedSession.title}
+            </p>
+
+            <div className="mt-4 flex items-center gap-3">
+              <div className="h-1 flex-1 overflow-hidden rounded-full bg-zinc-800">
+                <div
+                  className="h-full bg-red-600"
+                  style={{ width: `${savedProgress}%` }}
+                />
+              </div>
+              <span className="w-10 text-right text-xs text-zinc-500">
+                {savedProgress}%
+              </span>
+            </div>
+
+            <button
+              onClick={resumeSavedSession}
+              className="mt-5 w-full rounded-lg bg-red-600 px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-red-500"
+            >
+              Resume
+            </button>
+          </section>
+        )}
+
         <div 
           onClick={isZenMode ? togglePlay : undefined}
           className={`w-full flex justify-center items-center ${isZenMode ? 'cursor-pointer' : ''}`}
@@ -372,8 +513,7 @@ const App: React.FC = () => {
                 </div>
                 <button
                   onClick={() => {
-                    setText("");
-                    reset();
+                    setReaderText("");
                   }}
                   className="text-xs text-zinc-500 hover:text-red-500 transition-colors uppercase font-bold tracking-widest"
                 >
