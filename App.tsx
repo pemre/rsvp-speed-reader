@@ -20,6 +20,10 @@ import {
   Type,
   Layout,
   Music,
+  Clipboard,
+  Link,
+  FolderOpen,
+  Globe2,
 } from "lucide-react";
 import RSVPPlayer from "./components/RSVPPlayer";
 import BackgroundMusic from "./components/BackgroundMusic";
@@ -48,11 +52,13 @@ const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [isZenMode, setIsZenMode] = useState<boolean>(false);
   const [showZenHint, setShowZenHint] = useState<boolean>(false);
+  const [textSourceStatus, setTextSourceStatus] = useState<string>("");
 
   const words = useMemo(() => processText(text), [text]);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textFileInputRef = useRef<HTMLInputElement>(null);
 
   const togglePlay = useCallback(() => {
     setIsPlaying((prev) => {
@@ -68,6 +74,67 @@ const App: React.FC = () => {
     setCurrentIndex(0);
   }, []);
 
+  const loadText = useCallback(
+    (nextText: string, successMessage?: string) => {
+      setText(nextText);
+      reset();
+      if (successMessage) {
+        setTextSourceStatus(successMessage);
+      }
+    },
+    [reset]
+  );
+
+  const pasteFromClipboard = useCallback(async () => {
+    try {
+      const clipboardText = await navigator.clipboard.readText();
+      const trimmedText = clipboardText.trim();
+
+      if (!trimmedText) {
+        setTextSourceStatus("Clipboard is empty.");
+        return;
+      }
+
+      loadText(trimmedText, `Loaded ${trimmedText.split(/\s+/).length} words from clipboard.`);
+      setShowSettings(false);
+    } catch {
+      setTextSourceStatus("Clipboard access was blocked. Paste manually in settings.");
+      setShowSettings(true);
+    }
+  }, [loadText]);
+
+  const readFromUrl = useCallback(() => {
+    const url = window.prompt("Paste a URL to read");
+    const trimmedUrl = url?.trim();
+
+    if (!trimmedUrl) return;
+
+    loadText(trimmedUrl, "URL loaded. Direct article extraction can come next.");
+    setShowSettings(false);
+  }, [loadText]);
+
+  const openTextFile = useCallback((file: File) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      const fileText = String(reader.result ?? "").trim();
+
+      if (!fileText) {
+        setTextSourceStatus("That file did not contain readable text.");
+        return;
+      }
+
+      loadText(fileText, `Loaded ${file.name}.`);
+      setShowSettings(false);
+    };
+
+    reader.onerror = () => {
+      setTextSourceStatus("Could not read that file.");
+    };
+
+    reader.readAsText(file);
+  }, [loadText]);
+
   useEffect(() => {
     try {
       const hashParams = new URLSearchParams(window.location.hash.slice(1));
@@ -76,12 +143,11 @@ const App: React.FC = () => {
 
       if (!prefilledText) return;
 
-      setText(prefilledText);
-      reset();
+      loadText(prefilledText, "Loaded shared text from link.");
     } catch {
       // Ignore malformed hash payloads and keep default text.
     }
-  }, [reset]);
+  }, [loadText]);
 
   const enterZenMode = () => {
     setIsZenMode(true);
@@ -254,6 +320,61 @@ const App: React.FC = () => {
           isZenMode ? "gap-0 py-0" : "gap-8 py-12"
         }`}
       >
+        {!isZenMode && (
+          <section className="grid w-full max-w-3xl grid-cols-1 gap-3 sm:grid-cols-2">
+            <button
+              onClick={pasteFromClipboard}
+              className="flex items-center justify-center gap-3 rounded-xl border border-zinc-800 bg-black px-4 py-4 text-sm font-medium tracking-widest text-zinc-300 transition-colors hover:border-zinc-600 hover:text-white"
+            >
+              <Clipboard size={18} />
+              Paste from Clipboard
+            </button>
+
+            <button
+              onClick={readFromUrl}
+              className="flex items-center justify-center gap-3 rounded-xl border border-zinc-800 bg-black px-4 py-4 text-sm font-medium tracking-widest text-zinc-300 transition-colors hover:border-zinc-600 hover:text-white"
+            >
+              <Link size={18} />
+              Read from URL
+            </button>
+
+            <input
+              ref={textFileInputRef}
+              type="file"
+              accept=".txt,.md,.text,text/plain,text/markdown"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) openTextFile(file);
+                e.target.value = "";
+              }}
+            />
+            <button
+              onClick={() => textFileInputRef.current?.click()}
+              className="flex items-center justify-center gap-3 rounded-xl border border-zinc-800 bg-black px-4 py-4 text-sm font-medium tracking-widest text-zinc-300 transition-colors hover:border-zinc-600 hover:text-white"
+            >
+              <FolderOpen size={18} />
+              Open TXT / MD
+            </button>
+
+            <button
+              onClick={() => {
+                setTextSourceStatus("Browse Web is planned next. Tiny scope, fewer dragons.");
+              }}
+              className="flex items-center justify-center gap-3 rounded-xl border border-zinc-800 bg-black px-4 py-4 text-sm font-medium tracking-widest text-zinc-300 transition-colors hover:border-zinc-600 hover:text-white"
+            >
+              <Globe2 size={18} />
+              Browse Web (Beta)
+            </button>
+
+            {textSourceStatus && (
+              <p className="sm:col-span-2 text-center text-xs text-zinc-500">
+                {textSourceStatus}
+              </p>
+            )}
+          </section>
+        )}
+
         <div 
           onClick={isZenMode ? togglePlay : undefined}
           className={`w-full flex justify-center items-center ${isZenMode ? 'cursor-pointer' : ''}`}
